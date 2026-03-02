@@ -1,0 +1,22 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.espIdfPathWin": "e:\\code\\esp32_Project\\v5.5.2\\esp-idf",
+  "idf.pythonInstallPath": "e:\\code\\esp32_Project\\tools\\tools\\idf-python\\3.11.2\\python.exe",
+  "idf.openOcdConfigs": [
+    "interface/ftdi/esp_ftdi.cfg",
+    "target/esp32s3.cfg"
+  ],
+  "idf.portWin": "COM5",
+  "idf.toolsPathWin": "e:\\code\\esp32_Project\\tools",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32s3"
+  },
+  "editor.semanticHighlighting.enabled": true,
+  "clangd.path": "e:\\code\\esp32_Project\\tools\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=e:\\code\\esp32_Project\\Project\\USB_CDC\\build"
+],
+"idf.flashType": "UART"
+}

@@ -58,4 +58,4 @@ cmake --build build || {
 }
 
 echo -e "${GREEN}Build completed successfully!${NC}"
-echo -e "${GREEN}Binary location: ${PROJECT_DIR}/build/hello_world.bin${NC}"
+echo -e "${GREEN}Binary location: ${PROJECT_DIR}/build/USB_CDC.bin${NC}"

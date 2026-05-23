@@ -2,3 +2,6 @@
 	path = source/drivers/LCD35
 	url = git@github.com:gaofengcc/LCD_Drivers.git
 	branch = esp32_ILI9488
+[submodule "source/components/miniCore"]
+	path = source/components/miniCore
+	url = git@github.com:gaofengcc/miniCore.git

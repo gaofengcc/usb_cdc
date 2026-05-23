@@ -10,4 +10,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # 克隆后执行: git submodule update --init source/drivers/LCD35
 list(APPEND EXTRA_COMPONENT_DIRS "source/drivers/LCD35")
 
+# miniCore 微内核 (submodule, 标准 CMake 库, 接入 ESP-IDF 需另建 idf 包装组件)
+# git submodule update --init source/components/miniCore
+
 project(USB_CDC)

@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,8 +17,10 @@
 #include "tinyusb_cdc_acm.h"
 #include "tusb.h"
 #include "sdkconfig.h"
+#include "uart_learn.h"
+#include "usb_cdc_bridge.h"
 
-static const char *TAG = "example";
+static const char *TAG = "usb_cdc_bridge";
 static uint8_t rx_buf[CONFIG_TINYUSB_CDC_RX_BUFSIZE + 1];
 
 #define CDC_PORT_COUNT              4U
@@ -156,17 +159,27 @@ static esp_err_t uart_bridge_init(uart_port_t uart_port, int tx_gpio, int rx_gpi
  */
 static void cdc_forward_to_uart(const app_message_t *msg)
 {
+    esp_err_t record_ret = ESP_OK;
+
     if ((msg == NULL) || (msg->buf_len == 0U)) {
         return;
     }
 
     if (msg->itf == TINYUSB_CDC_ACM_1) {
         (void)uart_write_bytes(UART_NUM_1, msg->buf, msg->buf_len);
+        record_ret = uart_learn_record_data(UART_LEARN_EVENT_TX, 1U, msg->buf, msg->buf_len);
+        if ((record_ret != ESP_OK) && (record_ret != ESP_ERR_NO_MEM)) {
+            ESP_LOGW(TAG, "Record TX event for port 1 failed: %s", esp_err_to_name(record_ret));
+        }
         return;
     }
 
     if (msg->itf == TINYUSB_CDC_ACM_2) {
         (void)uart_write_bytes(UART_NUM_2, msg->buf, msg->buf_len);
+        record_ret = uart_learn_record_data(UART_LEARN_EVENT_TX, 2U, msg->buf, msg->buf_len);
+        if ((record_ret != ESP_OK) && (record_ret != ESP_ERR_NO_MEM)) {
+            ESP_LOGW(TAG, "Record TX event for port 2 failed: %s", esp_err_to_name(record_ret));
+        }
         return;
     }
 
@@ -201,6 +214,21 @@ static void uart_forward_to_cdc(uart_port_t uart_port, uint8_t cdc_port, uint8_t
     esp_err_t err = tinyusb_cdcacm_write_flush(cdc_port, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "CDC%d flush from UART%d failed: %s", cdc_port, uart_port, esp_err_to_name(err));
+    }
+
+    if (uart_port == UART_NUM_1) {
+        err = uart_learn_record_data(UART_LEARN_EVENT_RX, 1U, rx_buf, (size_t)rx_len);
+        if ((err != ESP_OK) && (err != ESP_ERR_NO_MEM)) {
+            ESP_LOGW(TAG, "Record RX event for port 1 failed: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    if (uart_port == UART_NUM_2) {
+        err = uart_learn_record_data(UART_LEARN_EVENT_RX, 2U, rx_buf, (size_t)rx_len);
+        if ((err != ESP_OK) && (err != ESP_ERR_NO_MEM)) {
+            ESP_LOGW(TAG, "Record RX event for port 2 failed: %s", esp_err_to_name(err));
+        }
     }
 }
 
@@ -246,75 +274,108 @@ void tinyusb_cdc_line_state_changed_callback(int itf, cdcacm_event_t *event)
 {
     int dtr = event->line_state_changed_data.dtr;
     int rts = event->line_state_changed_data.rts;
+    esp_err_t ret = ESP_OK;
 
     ESP_LOGI(TAG, "Line state changed on channel %d: DTR:%d, RTS:%d", itf, dtr, rts);
+
+    if ((itf == TINYUSB_CDC_ACM_1) || (itf == TINYUSB_CDC_ACM_2)) {
+        ret = uart_learn_record_line_state((uint8_t)itf, (dtr != 0), (rts != 0));
+        if ((ret != ESP_OK) && (ret != ESP_ERR_NO_MEM)) {
+            ESP_LOGW(TAG, "Record line state for channel %d failed: %s", itf, esp_err_to_name(ret));
+        }
+    }
 }
 
-void app_main(void)
+esp_err_t usb_cdc_bridge_init(void)
 {
-    // Create FreeRTOS primitives
+    tinyusb_config_t tusb_cfg = {0};
+    tinyusb_config_cdcacm_t acm_cfg = {0};
+
+    if (app_queue != NULL) {
+        return ESP_OK;
+    }
+
     app_queue = xQueueCreate(5, sizeof(app_message_t));
-    assert(app_queue);
-    app_message_t msg;
+    if (app_queue == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
 
     ESP_LOGI(TAG, "USB initialization");
-    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+    tusb_cfg = TINYUSB_DEFAULT_CONFIG();
     tusb_cfg.descriptor.full_speed_config = g_cdc4_no_notify_fs_desc;
-    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+    ESP_RETURN_ON_ERROR(tinyusb_driver_install(&tusb_cfg), TAG, "Install TinyUSB driver failed");
 
-    tinyusb_config_cdcacm_t acm_cfg = {
-        .cdc_port = TINYUSB_CDC_ACM_0,
-        .callback_rx = &tinyusb_cdc_rx_callback, // the first way to register a callback
-        .callback_rx_wanted_char = NULL,
-        .callback_line_state_changed = NULL,
-        .callback_line_coding_changed = NULL
-    };
+    acm_cfg.cdc_port = TINYUSB_CDC_ACM_0;
+    acm_cfg.callback_rx = &tinyusb_cdc_rx_callback;
+    acm_cfg.callback_rx_wanted_char = NULL;
+    acm_cfg.callback_line_state_changed = NULL;
+    acm_cfg.callback_line_coding_changed = NULL;
 
-    ESP_ERROR_CHECK(tinyusb_cdcacm_init(&acm_cfg));
-    ESP_ERROR_CHECK(tinyusb_cdcacm_register_callback(
-                        TINYUSB_CDC_ACM_0,
-                        CDC_EVENT_LINE_STATE_CHANGED,
-                        &tinyusb_cdc_line_state_changed_callback));
+    ESP_RETURN_ON_ERROR(tinyusb_cdcacm_init(&acm_cfg), TAG, "Init CDC0 failed");
+    ESP_RETURN_ON_ERROR(
+        tinyusb_cdcacm_register_callback(
+            TINYUSB_CDC_ACM_0,
+            CDC_EVENT_LINE_STATE_CHANGED,
+            &tinyusb_cdc_line_state_changed_callback),
+        TAG,
+        "Register CDC0 line state callback failed");
 
 #if (CONFIG_TINYUSB_CDC_COUNT > 1)
     acm_cfg.cdc_port = TINYUSB_CDC_ACM_1;
-    ESP_ERROR_CHECK(tinyusb_cdcacm_init(&acm_cfg));
-    ESP_ERROR_CHECK(tinyusb_cdcacm_register_callback(
-                        TINYUSB_CDC_ACM_1,
-                        CDC_EVENT_LINE_STATE_CHANGED,
-                        &tinyusb_cdc_line_state_changed_callback));
+    ESP_RETURN_ON_ERROR(tinyusb_cdcacm_init(&acm_cfg), TAG, "Init CDC1 failed");
+    ESP_RETURN_ON_ERROR(
+        tinyusb_cdcacm_register_callback(
+            TINYUSB_CDC_ACM_1,
+            CDC_EVENT_LINE_STATE_CHANGED,
+            &tinyusb_cdc_line_state_changed_callback),
+        TAG,
+        "Register CDC1 line state callback failed");
 #endif
 
 #if (CONFIG_TINYUSB_CDC_COUNT > 2)
     acm_cfg.cdc_port = TINYUSB_CDC_ACM_2;
-    ESP_ERROR_CHECK(tinyusb_cdcacm_init(&acm_cfg));
-    ESP_ERROR_CHECK(tinyusb_cdcacm_register_callback(
-                        TINYUSB_CDC_ACM_2,
-                        CDC_EVENT_LINE_STATE_CHANGED,
-                        &tinyusb_cdc_line_state_changed_callback));
+    ESP_RETURN_ON_ERROR(tinyusb_cdcacm_init(&acm_cfg), TAG, "Init CDC2 failed");
+    ESP_RETURN_ON_ERROR(
+        tinyusb_cdcacm_register_callback(
+            TINYUSB_CDC_ACM_2,
+            CDC_EVENT_LINE_STATE_CHANGED,
+            &tinyusb_cdc_line_state_changed_callback),
+        TAG,
+        "Register CDC2 line state callback failed");
 #endif
 
 #if (CONFIG_TINYUSB_CDC_COUNT > 3)
     acm_cfg.cdc_port = TINYUSB_CDC_ACM_3;
-    ESP_ERROR_CHECK(tinyusb_cdcacm_init(&acm_cfg));
-    ESP_ERROR_CHECK(tinyusb_cdcacm_register_callback(
-                        TINYUSB_CDC_ACM_3,
-                        CDC_EVENT_LINE_STATE_CHANGED,
-                        &tinyusb_cdc_line_state_changed_callback));
+    ESP_RETURN_ON_ERROR(tinyusb_cdcacm_init(&acm_cfg), TAG, "Init CDC3 failed");
+    ESP_RETURN_ON_ERROR(
+        tinyusb_cdcacm_register_callback(
+            TINYUSB_CDC_ACM_3,
+            CDC_EVENT_LINE_STATE_CHANGED,
+            &tinyusb_cdc_line_state_changed_callback),
+        TAG,
+        "Register CDC3 line state callback failed");
 #endif
 
-    // Keep UART0 for download/log output on COM5, only bridge CDC1/CDC2.
-    ESP_ERROR_CHECK(uart_bridge_init(UART_NUM_1, UART1_TX_GPIO, UART1_RX_GPIO));
-    ESP_ERROR_CHECK(uart_bridge_init(UART_NUM_2, UART2_TX_GPIO, UART2_RX_GPIO));
+    ESP_RETURN_ON_ERROR(uart_bridge_init(UART_NUM_1, UART1_TX_GPIO, UART1_RX_GPIO), TAG, "Init UART1 bridge failed");
+    ESP_RETURN_ON_ERROR(uart_bridge_init(UART_NUM_2, UART2_TX_GPIO, UART2_RX_GPIO), TAG, "Init UART2 bridge failed");
 
     ESP_LOGI(TAG, "USB initialization DONE");
-    while (1) {
-        if (xQueueReceive(app_queue, &msg, pdMS_TO_TICKS(10))) {
-            cdc_forward_to_uart(&msg);
-        }
 
-        uart_forward_to_cdc(UART_NUM_1, TINYUSB_CDC_ACM_1, s_uart1_rx_buf, sizeof(s_uart1_rx_buf));
-        uart_forward_to_cdc(UART_NUM_2, TINYUSB_CDC_ACM_2, s_uart2_rx_buf, sizeof(s_uart2_rx_buf));
-        vTaskDelay(pdMS_TO_TICKS(1));
+    return ESP_OK;
+}
+
+void usb_cdc_bridge_process(void)
+{
+    app_message_t msg;
+
+    if (app_queue == NULL) {
+        return;
     }
+
+    if (xQueueReceive(app_queue, &msg, pdMS_TO_TICKS(10)) == pdTRUE) {
+        cdc_forward_to_uart(&msg);
+    }
+
+    uart_forward_to_cdc(UART_NUM_1, TINYUSB_CDC_ACM_1, s_uart1_rx_buf, sizeof(s_uart1_rx_buf));
+    uart_forward_to_cdc(UART_NUM_2, TINYUSB_CDC_ACM_2, s_uart2_rx_buf, sizeof(s_uart2_rx_buf));
 }

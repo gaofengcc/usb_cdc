@@ -6,7 +6,8 @@ add_compile_options(-w) # Turn off warnings until esp_tinyusb is updated IEC-86
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-# 添加额外的组件目录
+# LCD 驱动 (git submodule: gaofengcc/LCD_Drivers)
+# 克隆后执行: git submodule update --init source/drivers/LCD35
 list(APPEND EXTRA_COMPONENT_DIRS "source/drivers/LCD35")
 
 project(USB_CDC)

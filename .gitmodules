@@ -1,3 +1,4 @@
 [submodule "source/drivers/LCD35"]
 	path = source/drivers/LCD35
 	url = git@github.com:gaofengcc/LCD_Drivers.git
+	branch = esp32_ILI9488
